@@ -96,6 +96,56 @@ def analyze_procrastination(text):
     top_intervention = found[0]["intervention"] if found else "Try the 5-minute rule: commit to just 5 minutes of the task. You can stop after if you want."
     return {"patterns": found, "summary": summary, "intervention": top_intervention}
 
+
+# ── Attachment Style Detector (based on Bartholomew, 1990; Miller, 2024) ──
+ATTACHMENT_TYPES = [
+    {"id":"secure","name":"Secure Attachment","desc":"You're comfortable with intimacy and independence. You trust others and have a positive view of yourself and your partner.",
+     "dimensions":{"avoidance":"low","anxiety":"low"},
+     "patterns":["comfortable","trust","secure","open communication","support each other","healthy","stable","confident","give space","respect boundaries","independent but close","no need to check","honest","vulnerable"],
+     "guidance":"You have a solid foundation. Keep nurturing open communication and mutual respect. Even secure relationships need maintenance — continue practicing active listening and emotional availability."},
+    {"id":"preoccupied","name":"Preoccupied (Anxious) Attachment","desc":"You crave closeness but fear abandonment. You may seek excessive reassurance and worry your partner will leave.",
+     "dimensions":{"avoidance":"low","anxiety":"high"},
+     "patterns":["clingy","need reassurance","afraid of losing","can't live without","always worry","jealous","check phone","constant contact","abandonment","overthinking","anxious","panic when","too attached","fear of being alone","double texting","waiting for reply","need to know where","insecure","not enough","smothering"],
+     "guidance":"Your anxiety is driving the relationship, not your values. CBT approach: (1) Identify the 'abandonment script' — is there evidence your partner is leaving, or is this fear from past wounds? (2) Practice self-soothing instead of seeking reassurance — the relief from reassurance is temporary, the anxiety returns. (3) Build a life outside the relationship. Anxious attachment thrives when the relationship is your ONLY source of safety."},
+    {"id":"fearful","name":"Fearful Attachment","desc":"You want close relationships but fear getting hurt. You may push people away to protect yourself, then feel lonely.",
+     "dimensions":{"avoidance":"high","anxiety":"high"},
+     "patterns":["want to be close but afraid","fear of rejection","push away","sabotage","afraid of getting hurt","better to be alone","don't deserve","want love but scared","self-sabotage","test them","they'll leave anyway","not good enough for","avoid getting close","walls up","guarded","hot and cold","come here go away","conflicted"],
+     "guidance":"You're caught between wanting connection and fearing it. CBT approach: (1) Notice the sabotage pattern — when things get close, you create distance. This feels like protection but is actually self-abandonment. (2) The fear isn't about THIS person — it's about a past wound. Separate the two. (3) Practice 'safe vulnerability' — share something small and let the other person respond before sharing more. Trust is built in increments, not all at once."},
+    {"id":"dismissing","name":"Dismissing (Avoidant) Attachment","desc":"You value independence over intimacy. You may feel relationships are more trouble than they're worth.",
+     "dimensions":{"avoidance":"high","anxiety":"low"},
+     "patterns":["don't need anyone","independent","prefer alone","relationships are trouble","self-sufficient","don't care","not worth the effort","better single","too much drama","happy alone","don't need a relationship","privacy","need space","distant","emotionally unavailable","self-reliant","handle it myself","don't rely on others"],
+     "guidance":"Your independence is a strength, but extreme self-reliance is a defense. CBT approach: (1) Ask: does 'I don't need anyone' reflect a genuine preference or a fear of vulnerability? (2) Interdependence is not dependence — needing support is human, not weak. (3) Practice small acts of connection — asking for help, sharing a feeling, letting someone in on a bad day. The goal isn't to become clingy; it's to let the walls down occasionally."}
+]
+
+def analyze_attachment(text):
+    lower = text.strip().lower()
+    if not lower:
+        return {"attachment_type": None, "summary": "No input provided.", "guidance": ""}
+
+    scores = {}
+    for at in ATTACHMENT_TYPES:
+        matches = [p for p in at["patterns"] if p in lower]
+        scores[at["id"]] = {"type": at, "matches": matches, "score": len(matches)}
+
+    # Find the type with the most matches
+    best_id = max(scores, key=lambda k: scores[k]["score"])
+    best = scores[best_id]
+
+    if best["score"] == 0:
+        return {"attachment_type": None, "summary": "No strong attachment pattern markers detected. Try describing specific feelings and behaviors in your relationship for better detection.", "guidance": "Consider describing how you feel when your partner needs space, how you handle conflict, or how you feel about emotional vulnerability."}
+
+    at = best["type"]
+    confidence = "high" if best["score"] >= 5 else ("medium" if best["score"] >= 3 else "low")
+    summary = f"Detected {at['name']} (confidence: {confidence}, {best['score']} markers matched). Avoidance of intimacy: {at['dimensions']['avoidance']}. Anxiety about abandonment: {at['dimensions']['anxiety']}."
+
+    # Also note secondary type
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1]["score"], reverse=True)
+    secondary = None
+    if len(sorted_scores) > 1 and sorted_scores[1][1]["score"] > 0:
+        secondary = {"id": sorted_scores[1][0], "name": sorted_scores[1][1]["type"]["name"], "score": sorted_scores[1][1]["score"]}
+
+    return {"attachment_type": {"id": at["id"], "name": at["name"], "description": at["desc"], "dimensions": at["dimensions"], "confidence": confidence, "matched_patterns": best["matches"]}, "secondary_type": secondary, "summary": summary, "guidance": at["guidance"]}
+
 def analyze_thought(text):
     lower = text.strip().lower()
     if not lower:
@@ -138,9 +188,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/" or self.path == "/health":
-            self._json(200, {"status": "ok", "agent": "cbt-thought-analyzer", "version": "1.1.0"})
+            self._json(200, {"status": "ok", "agent": "cbt-thought-analyzer", "version": "1.2.0"})
         elif self.path == "/procrastination" or self.path == "/procrastination/health":
             self._json(200, {"status": "ok", "agent": "procrastination-detector", "version": "1.0.0"})
+        elif self.path == "/attachment" or self.path == "/attachment/health":
+            self._json(200, {"status": "ok", "agent": "attachment-style-detector", "version": "1.0.0"})
         else:
             self._json(404, {"error": "Not found"})
 
@@ -168,6 +220,22 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
+        # Route: /attachment → Attachment Style Detector
+        if self.path == "/attachment":
+            thought = body.get("thought") or body.get("input") or body.get("prompt") or body.get("text") or body.get("message") or ""
+            if not thought:
+                self._json(400, {"error": "Missing 'thought' field. Send {\"thought\": \"describe how you feel in your relationship\"}"})
+                return
+            result = analyze_attachment(thought)
+            self._json(200, {
+                "output": result["summary"],
+                "attachment_type": result["attachment_type"],
+                "secondary_type": result.get("secondary_type"),
+                "guidance": result["guidance"],
+                "metadata": {"agent": "attachment-style-detector", "version": "1.0.0", "type_detected": result["attachment_type"] is not None}
+            })
+            return
+
         # Default route: / → CBT Thought Analyzer
         thought = body.get("thought") or body.get("input") or body.get("prompt") or body.get("text") or body.get("message") or ""
         if not thought:
@@ -179,7 +247,7 @@ class Handler(BaseHTTPRequestHandler):
             "output": result["summary"],
             "distortions": result["distortions"],
             "reframe": result["reframe"],
-            "metadata": {"agent": "cbt-thought-analyzer", "version": "1.1.0", "distortions_found": len(result["distortions"])}
+            "metadata": {"agent": "cbt-thought-analyzer", "version": "1.2.0", "distortions_found": len(result["distortions"])}
         })
 
     def log_message(self, format, *args):
@@ -189,5 +257,5 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), Handler)
-    print(f"CBT Analyzer + Procrastination Detector running on port {port}")
+    print(f"CBT Analyzer + Procrastination Detector + Attachment Detector running on port {port}")
     server.serve_forever()
