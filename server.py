@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CBT Thought Analyzer — aitopia.ai Agent Endpoint
+"""CBT Thought Analyzer + Procrastination Detector — aitopia.ai Agent Endpoints
 Minimal Python HTTP server (stdlib only, no dependencies).
 Deployed on Render as a web service.
 """
@@ -43,6 +43,59 @@ DISTORTIONS = [
      "reframe":"What part was genuinely under your control, and what wasn't? Other people's reactions are their responsibility, not solely yours."}
 ]
 
+# ── Procrastination Pattern Detector ──
+PROCRASTINATION_PATTERNS = [
+    {"id":"perfectionism","name":"Perfectionism Block","desc":"You can't start because it won't be perfect.",
+     "patterns":["perfect","right way","not good enough","needs to be","has to be perfect","can't get it right","flawless"],
+     "intervention":"What's 'good enough' for a first draft? Perfection is the enemy of started. Give yourself permission to make a mess — you can edit bad work, but you can't edit a blank page."},
+    {"id":"fear_of_failure","name":"Fear of Failure","desc":"You avoid starting to avoid the possibility of failing.",
+     "patterns":["what if it fails","going to fail","fail","wrong","mistake","screw up","mess up","can't fail","embarrassing"],
+     "intervention":"What's the actual cost of failing? What's the cost of never trying? Most 'failures' are reversible. The only irreversible failure is the one where you never start."},
+    {"id":"overwhelm","name":"Task Overwhelm","desc":"The task feels too big, so you shut down.",
+     "patterns":["too much","so many","don't know where to start","overwhelming","too big","complicated","no idea how","too complex"],
+     "intervention":"Break it into absurdly small steps. 'Open the document' is step 1. 'Write one sentence' is step 2. What's step 1?"},
+    {"id":"waiting_motivation","name":"Waiting for Motivation","desc":"You think you need to feel ready before starting.",
+     "patterns":["not in the mood","wait until","when i feel ready","right mindset","need to feel","not feeling it","wait for inspiration","motivated"],
+     "intervention":"Action comes BEFORE motivation, not after. You don't need to feel ready. Set a 5-minute timer and start. Motivation follows action — this is the #1 CBT finding on procrastination."},
+    {"id":"avoidance","name":"Task Avoidance","desc":"You keep pushing it to 'later' without a concrete plan.",
+     "patterns":["later","tomorrow","next week","not now","put it off","another day","someday","eventually","after i"],
+     "intervention":"'Later' is not a time. Pick a specific clock time: 'I start at 3:07 PM.' Vague intentions don't trigger action. Specific times do."},
+    {"id":"all_or_nothing","name":"All-or-Nothing Approach","desc":"You can only do it if you can do it all at once.",
+     "patterns":["all at once","everything done","complete","can't do it all","finish it all","whole thing","from start to finish"],
+     "intervention":"You don't need to finish. You need to start. 10% done is infinitely more than 0% done. What's 10% of this task?"},
+    {"id":"guilt_cycle","name":"Gilt-Procrastination Cycle","desc":"You feel guilty about procrastinating, which makes you avoid it more.",
+     "patterns":["should have","guilty","lazy","beat myself up","procrastinating again","keep putting off","why can't i just","self sabotage"],
+     "intervention":"Guilt is fuel for avoidance, not action. Forgive yourself for yesterday. The question isn't 'why did I procrastinate?' — it's 'what's the next 5-minute action?'"},
+    {"id":"minimization","name":"Minimization Trap","desc":"You tell yourself it'll be quick, then don't start anyway.",
+     "patterns":["only takes","just a few","quick","five minutes","won't take long","easy","no big deal"],
+     "intervention":"If it's so quick, do it right now for 2 minutes. 'It's easy' is often a story we tell ourselves to avoid the discomfort of actually starting."}
+]
+
+def analyze_procrastination(text):
+    lower = text.strip().lower()
+    if not lower:
+        return {"patterns": [], "summary": "No input provided.", "intervention": ""}
+
+    found = []
+    for p in PROCRASTINATION_PATTERNS:
+        matches = [m for m in p["patterns"] if m in lower]
+        if matches:
+            confidence = "high" if len(matches) >= 3 else ("medium" if len(matches) == 2 else "low")
+            found.append({"id": p["id"], "name": p["name"], "description": p["desc"],
+                          "confidence": confidence, "matched_patterns": matches, "intervention": p["intervention"]})
+
+    order = {"high": 0, "medium": 1, "low": 2}
+    found.sort(key=lambda x: order.get(x["confidence"], 3))
+
+    if not found:
+        summary = "No strong procrastination patterns detected. Consider whether the delay is logistical (time/scheduling) rather than psychological."
+    else:
+        names = ", ".join(f["name"] for f in found)
+        summary = f"Detected {len(found)} procrastination pattern{'s' if len(found) > 1 else ''}: {names}."
+
+    top_intervention = found[0]["intervention"] if found else "Try the 5-minute rule: commit to just 5 minutes of the task. You can stop after if you want."
+    return {"patterns": found, "summary": summary, "intervention": top_intervention}
+
 def analyze_thought(text):
     lower = text.strip().lower()
     if not lower:
@@ -85,7 +138,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/" or self.path == "/health":
-            self._json(200, {"status": "ok", "agent": "cbt-thought-analyzer", "version": "1.0.0"})
+            self._json(200, {"status": "ok", "agent": "cbt-thought-analyzer", "version": "1.1.0"})
+        elif self.path == "/procrastination" or self.path == "/procrastination/health":
+            self._json(200, {"status": "ok", "agent": "procrastination-detector", "version": "1.0.0"})
         else:
             self._json(404, {"error": "Not found"})
 
@@ -98,6 +153,22 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "Invalid JSON body"})
             return
 
+        # Route: /procrastination → Procrastination Pattern Detector
+        if self.path == "/procrastination":
+            thought = body.get("thought") or body.get("input") or body.get("prompt") or body.get("text") or body.get("message") or ""
+            if not thought:
+                self._json(400, {"error": "Missing 'thought' field. Send {\"thought\": \"describe what you're procrastinating on\"}"})
+                return
+            result = analyze_procrastination(thought)
+            self._json(200, {
+                "output": result["summary"],
+                "patterns": result["patterns"],
+                "intervention": result["intervention"],
+                "metadata": {"agent": "procrastination-detector", "version": "1.0.0", "patterns_found": len(result["patterns"])}
+            })
+            return
+
+        # Default route: / → CBT Thought Analyzer
         thought = body.get("thought") or body.get("input") or body.get("prompt") or body.get("text") or body.get("message") or ""
         if not thought:
             self._json(400, {"error": "Missing 'thought' field. Send {\"thought\": \"your anxious thought here\"}"})
@@ -108,7 +179,7 @@ class Handler(BaseHTTPRequestHandler):
             "output": result["summary"],
             "distortions": result["distortions"],
             "reframe": result["reframe"],
-            "metadata": {"agent": "cbt-thought-analyzer", "version": "1.0.0", "distortions_found": len(result["distortions"])}
+            "metadata": {"agent": "cbt-thought-analyzer", "version": "1.1.0", "distortions_found": len(result["distortions"])}
         })
 
     def log_message(self, format, *args):
@@ -118,5 +189,5 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), Handler)
-    print(f"CBT Thought Analyzer running on port {port}")
+    print(f"CBT Analyzer + Procrastination Detector running on port {port}")
     server.serve_forever()
